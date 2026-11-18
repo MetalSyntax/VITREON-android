@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +66,8 @@ fun SettingsScreen(snack: (String) -> Unit) {
     var deleteAll by remember { mutableStateOf(false) }
     var plugins by remember { mutableStateOf(false) }
     var exportBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var legal by remember { mutableStateOf<Boolean?>(null) } // false = privacidad, true = términos
+    var whatsNew by remember { mutableStateOf(false) }
 
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         Pin.external = false
@@ -97,6 +100,15 @@ fun SettingsScreen(snack: (String) -> Unit) {
                     Mode.entries.forEach { m ->
                         Chip(when (m) { Mode.LIGHT -> L("Claro", "Light", "Claro"); Mode.DARK -> L("Oscuro", "Dark", "Escuro"); Mode.BLACK -> L("Negro", "Black", "Preto") },
                             Prefs.mode == m, icon = when (m) { Mode.LIGHT -> Icons.Outlined.LightMode; Mode.DARK -> Icons.Outlined.DarkMode; Mode.BLACK -> Icons.Outlined.Contrast }) { Prefs.applyMode(m) }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Caps(L("Color de acento", "Accent color", "Cor de destaque"))
+                Spacer(Modifier.height(6.dp))
+                ACCENTS.chunked(6).forEach { row -> // igual que Swatches de Parity
+                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        row.forEach { c -> Box(Modifier.size(40.dp).tap(onClick = { Prefs.applyAccent(c) }).clip(CircleShape).background(c), contentAlignment = Alignment.Center) {
+                            if (c == Prefs.accent) Icon(Icons.Outlined.Check, null, tint = Color.White, modifier = Modifier.size(20.dp)) } }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -148,6 +160,13 @@ fun SettingsScreen(snack: (String) -> Unit) {
             }
         }
         item {
+            Group(L("Privacidad y cumplimiento", "Privacy & Compliance", "Privacidade e conformidade"), Icons.Outlined.Gavel) {
+                SettingRow(L("Política de privacidad", "Privacy Policy", "Política de privacidade"), null, Icons.Outlined.Policy, onClick = { legal = false }) { Chevron() }
+                SettingRow(L("Términos y condiciones", "Terms & Conditions", "Termos e condições"), null, Icons.Outlined.Gavel, onClick = { legal = true }) { Chevron() }
+                SettingRow(L("Novedades", "What's New", "Novidades"), "v1.3.0", Icons.Outlined.NewReleases, onClick = { whatsNew = true }) { Chevron() }
+            }
+        }
+        item {
             Group(L("Datos", "Data", "Dados"), Icons.Outlined.Storage, Danger) {
                 val d = Store.data
                 Text("${d.notes.count { !it.trashed }} ${L("notas", "notes", "notas")} · ${d.categories.size} ${L("categorías", "categories", "categorias")} · ${d.allTags().size} ${L("etiquetas", "tags", "tags")}",
@@ -155,6 +174,10 @@ fun SettingsScreen(snack: (String) -> Unit) {
                 SettingRow(L("Borrar todos los datos", "Delete all data", "Apagar todos os dados"), null, Icons.Outlined.DeleteForever, Danger, Danger, onClick = { deleteAll = true }) { Chevron() }
                 Text("Vitreon ${BuildConfig.VERSION_NAME}", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.labelMedium, color = Muted)
             }
+        }
+        item {
+            Text(L("Hecho a mano para rendimiento y privacidad", "Handcrafted for performance & privacy", "Artesanal para performance e privacidade"),
+                Modifier.fillMaxWidth().padding(top = 20.dp), style = MaterialTheme.typography.labelSmall, color = Muted.copy(alpha = 0.6f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
 
@@ -187,10 +210,13 @@ fun SettingsScreen(snack: (String) -> Unit) {
         Store.deleteForever(Store.data.notes.map { it.id }.toSet())
         Store.data.categories.filter { it.id != UNCATEGORIZED && DEFAULT_CATEGORIES.none { d -> d.id == it.id } }.forEach { Store.deleteCategory(it.id) }
         Plugins.installed.forEach { Plugins.uninstall(it.id) }
+        Store.clearAvatar()
         deleteAll = false; snack(L("Datos borrados", "Data deleted", "Dados apagados"))
     }
     pending?.let { files -> ImportFlow(files, snack) { pending = null } }
     if (plugins) PluginsSheet { plugins = false }
+    legal?.let { LegalSheet(it) { legal = null } }
+    if (whatsNew) WhatsNewSheet { whatsNew = false }
 }
 
 /**
@@ -218,10 +244,10 @@ fun ImportFlow(files: List<SourceFile>, snack: (String) -> Unit, onDone: () -> U
         val json = files.firstOrNull { it.name.endsWith(".json", true) && it.text.contains("\"VitreonNotes\"") }
         when {
             json != null -> analyzeJson(json.text)
-            src == ImportSource.KEEP -> analysis = Store.analyze(Store.fromImported(KeepImporter.read(files)))
-            src == ImportSource.NOTION -> analysis = Store.analyze(Store.fromImported(NotionImporter.read(files)))
-            src == ImportSource.OBSIDIAN -> analysis = Store.analyze(Store.fromImported(ObsidianImporter.read(files)))
-            else -> analysis = Store.analyze(Store.fromImported(readPlain(files)))
+            src == ImportSource.KEEP -> analysis = Store.fromImported(KeepImporter.read(files)).let { (n, c) -> Store.analyze(n, c) }
+            src == ImportSource.NOTION -> analysis = Store.fromImported(NotionImporter.read(files)).let { (n, c) -> Store.analyze(n, c) }
+            src == ImportSource.OBSIDIAN -> analysis = Store.fromImported(ObsidianImporter.read(files)).let { (n, c) -> Store.analyze(n, c) }
+            else -> analysis = Store.fromImported(readPlain(files)).let { (n, c) -> Store.analyze(n, c) }
         }
     }
 
@@ -350,29 +376,74 @@ fun ProfileScreen(snack: (String) -> Unit) {
     var name by remember { mutableStateOf(d.profile.name) }
     var email by remember { mutableStateOf(d.profile.email) }
     var bio by remember { mutableStateOf(d.profile.bio) }
+    var editing by remember { mutableStateOf(false) }
+    var avatar by remember { mutableStateOf(Store.readAvatar()?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }) }
+    val ctx = LocalContext.current
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+        Pin.external = false
+        val raw = uri?.let { runCatching { ctx.contentResolver.openInputStream(it)!!.use { s -> s.readBytes() } }.getOrNull() } ?: return@rememberLauncherForActivityResult
+        val b = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return@rememberLauncherForActivityResult
+        val s = minOf(1f, 512f / maxOf(b.width, b.height))
+        val small = if (s < 1f) android.graphics.Bitmap.createScaledBitmap(b, (b.width * s).toInt(), (b.height * s).toInt(), true) else b
+        Store.writeAvatar(java.io.ByteArrayOutputStream().also { small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, it) }.toByteArray())
+        avatar = small; snack(L("Foto actualizada", "Profile image updated", "Foto atualizada"))
+    }
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 120.dp)) {
         item { Header(L("Perfil", "Profile", "Perfil")) }
         item {
-            Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(96.dp).clip(CircleShape).background(FabGradient), contentAlignment = Alignment.Center) {
-                    Text(name.split(' ').filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1).uppercase() }.ifEmpty { "V" },
-                        style = MaterialTheme.typography.headlineMedium, color = Color.White)
+            // como ProfileView.tsx: avatar cuadrado redondeado con borde en degradado índigo→púrpura→rosa
+            Column(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box {
+                    Box(Modifier.size(if (editing) 112.dp else 128.dp).clip(RoundedCornerShape(40.dp))
+                        .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(Brand, Purple, Color(0xFFF43F5E)))).padding(4.dp)) {
+                        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(36.dp)).background(Bg), contentAlignment = Alignment.Center) {
+                            val a = avatar
+                            if (a != null) androidx.compose.foundation.Image(a.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                            else Text(name.split(' ').filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1).uppercase() }.ifEmpty { "V" },
+                                style = MaterialTheme.typography.displaySmall, color = Brand)
+                        }
+                    }
+                    if (editing) RoundIcon(Icons.Outlined.PhotoCamera, L("Cambiar foto", "Change photo", "Trocar foto"), { Pin.external = true; pick.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        tint = Color.White, size = 40.dp, bg = Brand, modifier = Modifier.align(Alignment.BottomEnd))
+                    else RoundIcon(Icons.Outlined.Edit, L("Editar", "Edit", "Editar"), { editing = true }, tint = Brand, size = 42.dp, modifier = Modifier.align(Alignment.BottomEnd))
+                }
+                if (editing && avatar != null) GhostButton(L("Quitar foto", "Remove photo", "Remover foto"), Icons.Outlined.Delete, Danger, Modifier.padding(top = 8.dp)) { Store.clearAvatar(); avatar = null }
+                if (!editing) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(d.profile.name.ifBlank { L("Sin nombre", "No name", "Sem nome") }, style = MaterialTheme.typography.headlineMedium, color = Ink)
+                    if (d.profile.email.isNotBlank()) Text(d.profile.email, style = MaterialTheme.typography.titleSmall, color = Brand)
+                    if (d.profile.bio.isNotBlank()) Text(d.profile.bio, Modifier.padding(top = 10.dp).widthIn(max = 260.dp), style = MaterialTheme.typography.bodySmall, color = Muted,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Spacer(Modifier.height(16.dp))
+                    BrandButton(L("Editar", "Edit", "Editar"), icon = Icons.Outlined.Edit) { editing = true }
                 }
             }
         }
-        item {
+        if (!editing) item {
+            Caps(L("Analítica", "Analytics", "Análise"), Modifier.padding(start = 8.dp, bottom = 8.dp))
+            val live = d.notes.filter { !it.trashed }
+            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(live.size to L("Notas guardadas", "Saved notes", "Notas salvas"), d.categories.size to L("Categorías", "Categories", "Categorias")).forEach { (v, k) ->
+                    Glass(Modifier.weight(1f)) { Column(Modifier.padding(20.dp)) { Text("$v", style = MaterialTheme.typography.headlineMedium, color = Ink); Caps(k) } }
+                }
+            }
+        }
+        if (editing) item {
             Group(L("Datos", "Details", "Dados"), Icons.Outlined.Person) {
                 Field(name, { name = it }, L("Nombre", "Name", "Nome"))
                 Field(email, { email = it }, L("Correo", "Email", "E-mail"))
                 Field(bio, { bio = it }, L("Bio", "Bio", "Bio"), singleLine = false)
                 Spacer(Modifier.height(8.dp))
-                BrandButton(L("Guardar", "Save", "Salvar"), Modifier.fillMaxWidth(), Icons.Outlined.Check,
-                    enabled = name != d.profile.name || email != d.profile.email || bio != d.profile.bio) {
-                    Store.saveProfile(Profile(name.trim(), email.trim(), bio.trim())); snack(L("Perfil guardado", "Profile saved", "Perfil salvo"))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostButton(L("Cancelar", "Cancel", "Cancelar"), Icons.Outlined.Close, modifier = Modifier.weight(1f)) {
+                        name = d.profile.name; email = d.profile.email; bio = d.profile.bio; editing = false }
+                    BrandButton(L("Guardar", "Save", "Salvar"), Modifier.weight(1f), Icons.Outlined.Check) {
+                        Store.saveProfile(Profile(name.trim(), email.trim(), bio.trim())); editing = false; snack(L("Perfil guardado", "Profile saved", "Perfil salvo"))
+                    }
                 }
             }
         }
-        item {
+        if (!editing) item {
             Group(L("Estadísticas", "Stats", "Estatísticas"), Icons.Outlined.Insights) {
                 val live = d.notes.filter { !it.trashed }
                 listOf(L("Notas", "Notes", "Notas") to live.size, L("Fijadas", "Pinned", "Fixadas") to live.count { it.pinned },

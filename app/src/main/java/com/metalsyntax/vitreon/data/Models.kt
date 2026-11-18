@@ -13,6 +13,7 @@ enum class AttachmentType { IMAGE, DRAWING, VOICE }
 /** Adjunto: los bytes viven cifrados en filesDir/att/<id> (la web los metía en base64 dentro de la nota y todo iba lento). */
 data class Attachment(val id: String = newId(), val type: AttachmentType, val mime: String = "image/jpeg")
 
+@androidx.compose.runtime.Immutable // lista y JSONObject lo hacen «inestable»: sin esto cada tarjeta se recomponía (y re-parseaba Markdown) en cada cambio
 data class Note(
     val id: String = newId(),
     val title: String = "",
@@ -33,6 +34,8 @@ data class Note(
     val deletedAt: Long? = null,
     /** Huella para no duplicar al importar: se guarda en cada nota (la web solo la ponía al exportar). */
     val importId: String? = null,
+    /** Color de la nota (clave de [NOTE_COLORS]); la web no tiene este campo: se guarda como `color` y ella lo conserva como campo desconocido. */
+    val color: String? = null,
     val extra: JSONObject = JSONObject(),
 ) {
     val trashed get() = deletedAt != null
@@ -49,6 +52,12 @@ data class Category(val id: String = newId(), val name: String, val color: Strin
 data class Profile(val name: String = "", val email: String = "", val bio: String = "")
 
 const val UNCATEGORIZED = "uncategorized"
+
+/** Colores de nota (los de Google Keep, en tono Tailwind-500); null = sin color. */
+val NOTE_COLORS = linkedMapOf(
+    "red" to 0xFFEF4444, "orange" to 0xFFF97316, "yellow" to 0xFFEAB308, "green" to 0xFF22C55E, "teal" to 0xFF14B8A6, "blue" to 0xFF3B82F6,
+    "cerulean" to 0xFF06B6D4, "purple" to 0xFFA855F7, "pink" to 0xFFEC4899, "brown" to 0xFFA16207, "gray" to 0xFF94A3B8,
+)
 
 val DEFAULT_CATEGORIES = listOf(
     Category("work", "Trabajo", "blue", "work"),
@@ -87,7 +96,7 @@ data class AppData(
  */
 object Json {
     private val KNOWN = setOf("id", "title", "content", "category", "isPinned", "isArchived", "isLocked", "sealed", "isChecklist", "tags",
-        "attachments", "order", "createdAt", "updatedAt", "deletedAt", "importId", "images", "drawings", "voiceNotes")
+        "attachments", "order", "createdAt", "updatedAt", "deletedAt", "importId", "color", "images", "drawings", "voiceNotes")
 
     private fun JSONObject.long(k: String): Long? = when (val v = opt(k)) {
         is Number -> v.toLong()
@@ -114,7 +123,7 @@ object Json {
             } }.orEmpty(),
             order = o.optDouble("order", 0.0).takeUnless { it.isNaN() } ?: 0.0,
             createdAt = created, updatedAt = o.long("updatedAt") ?: created, deletedAt = o.long("deletedAt"),
-            importId = o.optString("importId").ifBlank { null }, extra = extra,
+            importId = o.optString("importId").ifBlank { null }, color = o.optString("color").takeIf { it in NOTE_COLORS }, extra = extra,
         )
     }
 
@@ -124,7 +133,7 @@ object Json {
         .put("tags", JSONArray(n.tags)).put("order", n.order).put("createdAt", n.createdAt).put("updatedAt", n.updatedAt)
         .put("importId", n.fingerprint)
         .put("attachments", JSONArray(n.attachments.map { JSONObject().put("id", it.id).put("type", it.type.name.lowercase()).put("mime", it.mime) }))
-        .apply { n.deletedAt?.let { put("deletedAt", it) }; if (withSecrets) n.sealed?.let { put("sealed", it) } }
+        .apply { n.deletedAt?.let { put("deletedAt", it) }; n.color?.let { put("color", it) }; if (withSecrets) n.sealed?.let { put("sealed", it) } }
 
     fun category(o: JSONObject) = Category(o.optString("id").ifBlank { newId() }, o.optString("name"), o.optString("color", "slate"), o.optString("icon", "folder"))
     fun category(c: Category) = JSONObject().put("id", c.id).put("name", c.name).put("color", c.color).put("icon", c.icon)

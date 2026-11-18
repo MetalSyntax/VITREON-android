@@ -68,7 +68,7 @@ private fun Double.em() = androidx.compose.ui.unit.TextUnit(this.toFloat(), andr
 
 @Composable
 private fun Rich(src: String, style: TextStyle, color: Color = Ink, a: ReaderActions) {
-    val text = styled(src, color)
+    val text = androidx.compose.runtime.remember(src) { styled(src, color) }
     ClickableText(text, style = style.copy(color = color)) { off ->
         text.getStringAnnotations(off, off).firstOrNull()?.let { ann ->
             when (ann.tag) {
@@ -93,7 +93,7 @@ private fun calloutColor(kind: String) = when (kind) {
 fun MarkdownView(src: String, a: ReaderActions = ReaderActions(), maxBlocks: Int = Int.MAX_VALUE, compact: Boolean = false) {
     val body = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)) {
-        Markdown.blocks(src).take(maxBlocks).forEach { b ->
+        androidx.compose.runtime.remember(src, maxBlocks) { Markdown.blocks(src).take(maxBlocks) }.forEach { b ->
             when (b) {
                 is Block.Heading -> Rich(b.text, when (b.level) {
                     1 -> MaterialTheme.typography.headlineMedium; 2 -> MaterialTheme.typography.headlineSmall; 3 -> MaterialTheme.typography.titleLarge

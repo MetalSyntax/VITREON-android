@@ -26,6 +26,13 @@ data class Span(val start: Int, val end: Int, val style: InlineStyle, val target
 data class Inline(val text: String, val spans: List<Span>)
 
 object Markdown {
+    private val HEADING_RE = Regex("^(#{1,6})\\s+(.*)")
+    private val RULE_RE = Regex("^([-*_])(\\s*\\1){2,}\\s*$")
+    private val ITEM_RE = Regex("^(\\s*)([-*+]|\\d+[.)])\\s+(.*)")
+    private val TASK_RE = Regex("^\\[([ xX])]\\s*(.*)")
+    private val TSEP_RE = Regex("^\\|?\\s*:?-{2,}.*")
+    private val CALLOUT_RE = Regex("^\\[!(\\w+)]([+-])?\\s*(.*)")
+    private val NL2_RE = Regex("\n{2,}")
     fun blocks(src: String): List<Block> {
         val out = mutableListOf<Block>()
         val lines = src.replace("\r\n", "\n").split('\n')
@@ -52,26 +59,26 @@ object Markdown {
                     out += Block.Code(lang, body.joinToString("\n"))
                 }
                 t.isEmpty() -> flush()
-                Regex("^(#{1,6})\\s+(.*)").matchEntire(t) != null -> { flush(); val m = Regex("^(#{1,6})\\s+(.*)").matchEntire(t)!!; out += Block.Heading(m.groupValues[1].length, m.groupValues[2].trimEnd('#', ' ')) }
-                t.matches(Regex("^([-*_])(\\s*\\1){2,}\\s*$")) -> { flush(); out += Block.Rule }
+                HEADING_RE.matchEntire(t) != null -> { flush(); val m = HEADING_RE.matchEntire(t)!!; out += Block.Heading(m.groupValues[1].length, m.groupValues[2].trimEnd('#', ' ')) }
+                t.matches(RULE_RE) -> { flush(); out += Block.Rule }
                 t.startsWith(">") -> {
                     flush()
                     val q = mutableListOf<String>()
                     while (i < lines.size && lines[i].trimStart().startsWith(">")) { q += lines[i].trimStart().removePrefix(">").removePrefix(" "); i++ }
                     i--
-                    val first = Regex("^\\[!(\\w+)]([+-])?\\s*(.*)").matchEntire(q.first())
+                    val first = CALLOUT_RE.matchEntire(q.first())
                     out += if (first != null) Block.Callout(first.groupValues[1].lowercase(), first.groupValues[3].ifBlank { first.groupValues[1].replaceFirstChar { it.uppercase() } }, q.drop(1).joinToString("\n"))
                     else Block.Quote(q.joinToString("\n"))
                 }
-                Regex("^(\\s*)([-*+]|\\d+[.)])\\s+(.*)").matchEntire(l) != null -> {
+                ITEM_RE.matchEntire(l) != null -> {
                     flush()
-                    val m = Regex("^(\\s*)([-*+]|\\d+[.)])\\s+(.*)").matchEntire(l)!!
+                    val m = ITEM_RE.matchEntire(l)!!
                     val depth = m.groupValues[1].replace("\t", "  ").length / 2
                     val number = m.groupValues[2].trimEnd('.', ')').toIntOrNull()
-                    val task = Regex("^\\[([ xX])]\\s*(.*)").matchEntire(m.groupValues[3])
+                    val task = TASK_RE.matchEntire(m.groupValues[3])
                     out += Block.Item(task?.groupValues?.get(2) ?: m.groupValues[3], depth, number, task?.let { it.groupValues[1] != " " }, i)
                 }
-                t.startsWith("|") && i + 1 < lines.size && lines[i + 1].trim().matches(Regex("^\\|?\\s*:?-{2,}.*")) -> {
+                t.startsWith("|") && i + 1 < lines.size && lines[i + 1].trim().matches(TSEP_RE) -> {
                     flush()
                     fun cells(s: String) = s.trim().trim('|').split('|').map { it.trim() }
                     val header = cells(t); i += 2
@@ -157,7 +164,7 @@ object Markdown {
             is Block.Table -> (b.header + b.rows.flatten()).joinToString(" ")
             is Block.Properties, Block.Rule -> ""
         }
-    }.replace(Regex("\n{2,}"), "\n").trim()
+    }.replace(NL2_RE, "\n").trim()
 
     /** [[enlaces]] de una nota (para backlinks y para renombrar). */
     fun links(src: String): List<String> = Regex("\\[\\[([^\\]|#]+)").findAll(src).map { it.groupValues[1].trim() }.distinct().toList()

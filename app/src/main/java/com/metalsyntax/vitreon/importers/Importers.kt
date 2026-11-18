@@ -14,11 +14,14 @@ data class ImportedNote(
     val content: String,
     val tags: List<String> = emptyList(),
     val folder: String? = null,
+    /** Categoría explícita de la app de origen (propiedad «Category», `category:` del frontmatter, etiqueta de Keep); gana sobre [folder]. */
+    val category: String? = null,
     val pinned: Boolean = false,
     val archived: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
     val source: String,
+    val color: String? = null,
 )
 
 /** Un archivo dentro de lo que el usuario eligió (zip, carpeta o archivo suelto): ruta relativa + bytes. */
@@ -55,6 +58,9 @@ fun unzip(input: InputStream, maxBytes: Long = 200L * 1024 * 1024): List<SourceF
  * createdTimestampUsec, userEditedTimestampUsec). Las notas en la papelera no se importan.
  */
 object KeepImporter {
+    /** Color de Keep (DEFAULT, RED, … GRAY) → clave de [com.metalsyntax.vitreon.data.NOTE_COLORS]; DEFAULT y desconocidos = sin color. */
+    fun color(keep: String): String? = keep.lowercase().takeIf { it in com.metalsyntax.vitreon.data.NOTE_COLORS }
+
     fun canRead(files: List<SourceFile>) = files.any { it.path.endsWith(".json", true) && it.text.contains("\"userEditedTimestampUsec\"") }
 
     fun read(files: List<SourceFile>): List<ImportedNote> = files.filter { it.path.endsWith(".json", true) }.mapNotNull { f ->
@@ -81,10 +87,10 @@ object KeepImporter {
             title = o.optString("title").ifBlank { f.name.removeSuffix(".json") },
             content = body.toString().trimEnd(),
             tags = labels,
-            folder = labels.firstOrNull(),
+            category = labels.firstOrNull(),
             pinned = o.optBoolean("isPinned"), archived = o.optBoolean("isArchived"),
             createdAt = if (created > 0) created else edited, updatedAt = if (edited > 0) edited else created,
-            source = "keep",
+            source = "keep", color = color(o.optString("color")),
         )
     }
 }
@@ -100,6 +106,10 @@ object NotionImporter {
     private val ID = Regex("""\s+[0-9a-f]{32}(?=$|\.|/)""")
     fun clean(s: String) = s.replace("%20", " ").replace(ID, "")
 
+    private val TAG_KEYS = setOf("tags", "etiquetas", "labels", "tag", "etiqueta")
+    private val CATEGORY_KEYS = setOf("category", "categoría", "categoria", "categories", "categorías", "categorias", "type", "tipo", "área", "area")
+    private val DATE_KEYS = setOf("created", "created time", "creado", "fecha de creación", "date", "fecha")
+
     fun canRead(files: List<SourceFile>) = files.any { it.path.endsWith(".md", true) && ID.containsMatchIn(it.path) }
 
     fun read(files: List<SourceFile>): List<ImportedNote> = files.filter { it.path.endsWith(".md", true) }.map { f ->
@@ -111,13 +121,15 @@ object NotionImporter {
         val title = h1?.removePrefix("# ")?.trim() ?: path.substringAfterLast('/')
         if (h1 != null) text = text.substringAfter(h1).trimStart('\n')
         // propiedades: bloque de «Clave: valor» al principio
-        val tags = mutableListOf<String>()
         val props = text.lines().takeWhile { it.isNotBlank() && Regex("^[\\p{L} ]{1,30}: .+").matches(it) }
-        props.forEach { p -> if (p.substringBefore(':').trim().lowercase() in setOf("tags", "etiquetas", "labels")) tags += p.substringAfter(':').split(',').map { it.trim() }.filter { it.isNotEmpty() } }
+            .associate { it.substringBefore(':').trim().lowercase() to it.substringAfter(':').trim() }
+        val tags = props.filterKeys { it in TAG_KEYS }.values.flatMap { v -> v.split(',').map { it.trim() }.filter { it.isNotEmpty() } }
+        val category = props.filterKeys { it in CATEGORY_KEYS }.values.firstNotNullOfOrNull { v -> v.split(',').map { it.trim() }.firstOrNull { it.isNotEmpty() } }
+        val created = props.filterKeys { it in DATE_KEYS }.values.firstNotNullOfOrNull(::parseDate)
         // enlaces internos [Texto](Otra%20pagina%20<id>.md) → [[Otra pagina]]
         text = Regex("""\[([^\]]+)]\(([^)]+?)\.md\)""").replace(text) { m -> "[[" + clean(m.groupValues[2]).substringAfterLast('/') + "]]" }
         val folder = path.substringBeforeLast('/', "").substringAfterLast('/').ifBlank { null }
-        ImportedNote(title, text.trim(), tags, folder, source = "notion")
+        ImportedNote(title, text.trim(), tags, folder, category, createdAt = created ?: System.currentTimeMillis(), source = "notion")
     }
 }
 
@@ -139,20 +151,28 @@ object ObsidianImporter {
             val rel = root?.let { f.path.removePrefix("$it/") } ?: f.path
             val (front, body) = Frontmatter.split(f.text)
             val tags = (Frontmatter.list(front, "tags") + Frontmatter.list(front, "tag") + Tags.find(body)).map { it.removePrefix("#") }.distinct()
-            val created = Frontmatter.value(front, "created")?.let(::parseDate)
+            val created = (Frontmatter.value(front, "created") ?: Frontmatter.value(front, "date"))?.let(::parseDate)
+            val updated = (Frontmatter.value(front, "updated") ?: Frontmatter.value(front, "modified"))?.let(::parseDate)
+            val category = listOf("category", "categories", "categoría", "categoria").firstNotNullOfOrNull { k ->
+                Frontmatter.value(front, k)?.takeIf { !it.startsWith("[") && !it.contains(',') } ?: Frontmatter.list(front, k).firstOrNull() }
             ImportedNote(
                 title = rel.substringAfterLast('/').removeSuffix(".md"),
                 // el frontmatter se conserva: es parte de la nota en Obsidian y lo usan los plugins
                 content = f.text.trimEnd(),
                 tags = tags, folder = rel.substringBeforeLast('/', "").substringAfterLast('/').ifBlank { null },
-                createdAt = created ?: System.currentTimeMillis(), source = "obsidian",
+                category = category,
+                pinned = Frontmatter.value(front, "pinned").toBool(), archived = Frontmatter.value(front, "archived").toBool(),
+                createdAt = created ?: System.currentTimeMillis(), updatedAt = updated ?: created ?: System.currentTimeMillis(), source = "obsidian",
             )
         }
     }
 
-    private fun parseDate(s: String): Long? = runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()
-        ?: runCatching { java.time.LocalDate.parse(s.take(10)).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
+    private fun String?.toBool() = this?.lowercase() in setOf("true", "yes", "si", "sí")
 }
+
+/** ISO instant o fecha `2026-11-16…`; null si no se entiende. */
+fun parseDate(s: String): Long? = runCatching { Instant.parse(s.trim()).toEpochMilli() }.getOrNull()
+    ?: runCatching { java.time.LocalDate.parse(s.trim().take(10)).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
 
 /** Frontmatter YAML mínimo (lo que usan las notas: escalares y listas `[a, b]` o con guiones). */
 object Frontmatter {

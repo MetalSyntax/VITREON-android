@@ -78,6 +78,7 @@ fun NoteEditor(noteId: String?, initialCategory: String?, initialText: String? =
     LaunchedEffect(revealed) { if (body.text.isEmpty() && revealed.isNotEmpty()) body = TextFieldValue(revealed) }
     var category by rememberSaveable { mutableStateOf(note?.category ?: initialCategory ?: UNCATEGORIZED) }
     var tags by remember { mutableStateOf(note?.tags.orEmpty()) }
+    var color by remember { mutableStateOf(note?.color) }
     var attachments by remember { mutableStateOf(note?.attachments.orEmpty()) }
     var editing by rememberSaveable { mutableStateOf(note == null) }
     var menu by remember { mutableStateOf(false) }
@@ -92,13 +93,13 @@ fun NoteEditor(noteId: String?, initialCategory: String?, initialText: String? =
 
     fun current(): Note? {
         val base = Store.data.note(id) ?: Note(id = id, category = category)
-        return base.copy(title = title.trim(), category = category, tags = tags, attachments = attachments)
+        return base.copy(title = title.trim(), category = category, tags = tags, attachments = attachments, color = color)
     }
     /** Guardar: notas bloqueadas se re-cifran; una nota nueva vacía no se guarda. */
     fun persist() {
         val n = current() ?: return
         val changed = Store.data.note(id).let { old ->
-            old == null || old.title != n.title || old.category != n.category || old.tags != n.tags || old.attachments != n.attachments ||
+            old == null || old.title != n.title || old.category != n.category || old.tags != n.tags || old.color != n.color || old.attachments != n.attachments ||
                 (if (old.locked) Store.reveal(old) != body.text else old.content != body.text)
         }
         if (!changed) return
@@ -107,6 +108,8 @@ fun NoteEditor(noteId: String?, initialCategory: String?, initialText: String? =
         else Store.save(n.copy(content = body.text, updatedAt = now()))
     }
     fun closeAndSave() { persist(); nav.close() }
+    // Ctrl+S con teclado físico
+    LaunchedEffect(Shortcuts.saveTick) { if (Shortcuts.saveTick > 0) { persist(); nav.snack(L("Nota guardada", "Note saved", "Nota salva")) } }
     BackHandler { if (editing && note != null) { persist(); editing = false } else closeAndSave() }
     // la app pasa a segundo plano: se guarda igual
     val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
@@ -195,6 +198,19 @@ fun NoteEditor(noteId: String?, initialCategory: String?, initialText: String? =
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Store.data.categories.forEach { c ->
                         Chip(c.name, c.id == category, catColor(c.color), categoryIcon(c.icon)) { category = c.id }
+                    }
+                }
+                // color de la nota (opcional)
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Palette, L("Color", "Color", "Cor"), tint = Muted, modifier = Modifier.size(18.dp))
+                    Box(Modifier.size(30.dp).clip(CircleShape).background(Surface2).tap(onClick = { color = null }), contentAlignment = Alignment.Center) {
+                        if (color == null) Icon(Icons.Outlined.Check, null, tint = Ink, modifier = Modifier.size(16.dp)) else Icon(Icons.Outlined.FormatColorReset, null, tint = Muted, modifier = Modifier.size(16.dp))
+                    }
+                    NOTE_COLORS.forEach { (k, v) ->
+                        Box(Modifier.size(30.dp).clip(CircleShape).background(Color(v)).tap(onClick = { color = k }), contentAlignment = Alignment.Center) {
+                            if (color == k) Icon(Icons.Outlined.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
                 Spacer(Modifier.height(16.dp))

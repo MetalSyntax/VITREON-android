@@ -104,8 +104,8 @@ fun Caps(text: String, modifier: Modifier = Modifier, color: Color = Muted.copy(
     Text(text.uppercase(), modifier, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
 @Composable
-fun RoundIcon(icon: ImageVector, desc: String?, onClick: () -> Unit, tint: Color = Ink, size: Dp = 44.dp, bg: Color = Surface1, onLongClick: (() -> Unit)? = null) {
-    Box(Modifier.size(size).tap(onLongClick, onClick).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
+fun RoundIcon(icon: ImageVector, desc: String?, onClick: () -> Unit, tint: Color = Ink, size: Dp = 44.dp, bg: Color = Surface1, onLongClick: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+    Box(modifier.size(size).tap(onLongClick, onClick).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
         Icon(icon, desc, tint = tint, modifier = Modifier.size(size * 0.48f))
     }
 }

@@ -91,4 +91,27 @@ class StoreTest {
         val names = java.util.zip.ZipInputStream(Store.exportMarkdownZip().inputStream()).use { z -> generateSequence { z.nextEntry?.name }.toList() }
         assertEquals(listOf("Sin categoría/a_b_c.md"), names)
     }
+
+    @Test fun importedCategoryPrefersExplicitThenFolderThenTagAndNeverDuplicates() {
+        val imp = listOf(
+            com.metalsyntax.vitreon.importers.ImportedNote("a", "x", tags = listOf("t1"), folder = "carpeta", category = "TRABAJO", source = "t"),
+            com.metalsyntax.vitreon.importers.ImportedNote("b", "x", tags = listOf("t1"), folder = "CARPETA", source = "t"),
+            com.metalsyntax.vitreon.importers.ImportedNote("c", "x", tags = listOf("Proy/web"), source = "t"),
+            com.metalsyntax.vitreon.importers.ImportedNote("d", "x", source = "t"),
+        )
+        val (notes, created) = Store.fromImported(imp)
+        assertEquals("work", notes[0].category)                        // «TRABAJO» = categoría «Trabajo» existente (sin distinguir mayúsculas)
+        assertEquals(listOf("CARPETA", "Proy"), created.map { it.name }) // la carpeta gana a la etiqueta; la etiqueta anidada aporta su raíz
+        assertEquals(UNCATEGORIZED, notes[3].category); assertEquals(notes[1].category, created[0].id) // «carpeta» y «CARPETA» son una sola categoría
+        assertEquals(DEFAULT_CATEGORIES.size, Store.data.categories.size) // nada se guardó antes de aplicar
+        Store.apply(Store.analyze(notes, created), emptyMap())
+        assertEquals(DEFAULT_CATEGORIES.size + 2, Store.data.categories.size)
+    }
+
+    @Test fun backupCategoriesWithSameNameAreMergedAndUnknownIdsCreated() {
+        val incoming = listOf(note("x").copy(category = "old-id"), note("y", "d").copy(category = "Cocina"))
+        val a = Store.analyze(incoming, listOf(Category("old-id", "TRABAJO")))
+        assertEquals("work", a.new.first { it.title == "x" }.category)
+        assertEquals(listOf("Cocina"), a.categories.map { it.name })
+    }
 }

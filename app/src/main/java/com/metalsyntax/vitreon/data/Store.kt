@@ -144,12 +144,28 @@ object Store {
             notes = data.notes.map { if (it.category == id) it.copy(category = UNCATEGORIZED) else it }))
     }
 
-    /** Categoría por nombre (importaciones): existe → la misma; si no, una nueva con color e ícono de carpeta. */
+    private val NEW_COLORS = listOf("slate", "indigo", "violet", "teal", "orange", "pink", "cyan", "lime")
+
+    /** Categoría por nombre (plugins): existe → la misma; si no, una nueva con color e ícono de carpeta. */
     fun categoryFor(name: String?): String {
-        if (name.isNullOrBlank()) return UNCATEGORIZED
-        data.categories.firstOrNull { it.name.equals(name, true) || it.id.equals(name, true) }?.let { return it.id }
-        val colors = listOf("slate", "indigo", "violet", "teal", "orange", "pink", "cyan", "lime")
-        return Category(name = name, color = colors[data.categories.size % colors.size], icon = "folder").also { saveCategory(it) }.id
+        val (ids, created) = resolveCategories(listOf(name))
+        created.forEach { saveCategory(it) }
+        return ids.single()
+    }
+
+    /**
+     * Nombres de categoría → ids, sin guardar nada: los que ya existen (por nombre o id, sin distinguir mayúsculas) se reutilizan y
+     * los que faltan vuelven en la lista de nuevas (una sola por nombre). Así cancelar una importación no deja categorías vacías.
+     */
+    fun resolveCategories(names: List<String?>, existing: List<Category> = data.categories): Pair<List<String>, List<Category>> {
+        val created = mutableListOf<Category>()
+        val ids = names.map { raw ->
+            val n = raw?.trim().orEmpty()
+            if (n.isEmpty()) UNCATEGORIZED
+            else (existing + created).firstOrNull { it.name.equals(n, true) || it.id.equals(n, true) }?.id
+                ?: Category(name = n, color = NEW_COLORS[(existing.size + created.size) % NEW_COLORS.size]).also { created += it }.id
+        }
+        return ids to created
     }
 
     fun saveProfile(p: Profile) = commit(data.copy(profile = p))
@@ -160,6 +176,13 @@ object Store {
     fun writeAttachment(a: Attachment, bytes: ByteArray) { File(attDir, a.id).writeBytes(Vault.seal(bytes)) }
     fun readAttachment(a: Attachment): ByteArray? = File(attDir, a.id).takeIf { it.exists() }?.let { Vault.open(it.readBytes()) }
 
+    // ------------------------------------------------------------------------------------------ foto de perfil
+
+    private val avatarFile get() = File(attDir.parentFile, "avatar")
+    fun writeAvatar(bytes: ByteArray) { avatarFile.writeBytes(Vault.seal(bytes)) }
+    fun readAvatar(): ByteArray? = avatarFile.takeIf { it.exists() }?.let { runCatching { Vault.open(it.readBytes()) }.getOrNull() }
+    fun clearAvatar() { avatarFile.delete() }
+
     // ------------------------------------------------------------------------------------------ importar
 
     data class Conflict(val incoming: Note, val local: Note)
@@ -169,7 +192,17 @@ object Store {
      * Clasifica lo que llega: nuevas, actualizaciones (mismo id y la entrante es más nueva) y conflictos (mismo id con la local
      * más nueva, o misma huella con otro id). La web pisaba la local aunque fuera más reciente.
      */
-    fun analyze(incoming: List<Note>, categories: List<Category> = emptyList()): Analysis {
+    fun analyze(incomingRaw: List<Note>, categories: List<Category> = emptyList()): Analysis {
+        // categorías del respaldo que ya existen con otro id (mismo nombre) → se reutiliza la local; ids desconocidos (la web usaba el nombre) → se crean
+        val local = data.categories
+        val remap = mutableMapOf<String, String>()
+        val missing = categories.filter { c -> local.none { it.id == c.id } }.toMutableList()
+        missing.toList().forEach { c -> local.firstOrNull { it.name.equals(c.name, true) }?.let { remap[c.id] = it.id; missing -= c } }
+        val known = local.map { it.id }.toSet() + categories.map { it.id }
+        incomingRaw.map { it.category }.distinct().filter { it !in known && it != UNCATEGORIZED && it.isNotBlank() }.forEach { id ->
+            local.firstOrNull { it.name.equals(id, true) }?.let { remap[id] = it.id } ?: missing.add(Category(id, id, NEW_COLORS[(local.size + missing.size) % NEW_COLORS.size]))
+        }
+        val incoming = incomingRaw.map { n -> remap[n.category]?.let { n.copy(category = it) } ?: n }
         val byId = data.notes.associateBy { it.id }
         val byPrint = data.notes.associateBy { it.fingerprint }
         val new = mutableListOf<Note>(); val upd = mutableListOf<Note>(); val conf = mutableListOf<Conflict>()
@@ -184,7 +217,7 @@ object Store {
                 else -> new += n
             }
         }
-        return Analysis(new, upd, conf, categories.filter { c -> data.categories.none { it.id == c.id } })
+        return Analysis(new, upd, conf, missing)
     }
 
     enum class Resolution { KEEP_LOCAL, REPLACE, KEEP_BOTH }
@@ -208,11 +241,17 @@ object Store {
         commit(data.copy(notes = notes, categories = cats))
     }
 
-    /** Notas de Keep / Notion / Obsidian / Markdown → notas de Vitreon (la carpeta de origen se vuelve categoría). */
-    fun fromImported(list: List<ImportedNote>): List<Note> = list.map { i ->
-        Note(title = i.title, content = i.content, category = categoryFor(i.folder), pinned = i.pinned, archived = i.archived,
-            tags = i.tags.map { it.lowercase().replace(' ', '-') }.distinct(), checklist = false,
-            createdAt = i.createdAt, updatedAt = i.updatedAt, importId = fingerprintOf(i.title, i.content, i.createdAt))
+    /**
+     * Notas de Keep / Notion / Obsidian / Markdown → notas de Vitreon + categorías nuevas por crear (van a [analyze] y se guardan al aplicar).
+     * Categoría = la explícita (etiqueta de Keep, propiedad de Notion, `category:` de Obsidian) → carpeta de origen → primera etiqueta.
+     */
+    fun fromImported(list: List<ImportedNote>): Pair<List<Note>, List<Category>> {
+        val (ids, created) = resolveCategories(list.map { i -> i.category ?: i.folder ?: i.tags.firstOrNull()?.substringBefore('/') })
+        return list.mapIndexed { k, i ->
+            Note(title = i.title, content = i.content, category = ids[k], pinned = i.pinned, archived = i.archived, color = i.color,
+                tags = i.tags.map { it.lowercase().replace(' ', '-') }.distinct(),
+                createdAt = i.createdAt, updatedAt = i.updatedAt, importId = fingerprintOf(i.title, i.content, i.createdAt))
+        } to created
     }
 
     // ------------------------------------------------------------------------------------------ exportar

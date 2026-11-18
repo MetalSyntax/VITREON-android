@@ -30,6 +30,12 @@ import com.metalsyntax.vitreon.data.*
 import com.metalsyntax.vitreon.plugins.Plugins
 import com.metalsyntax.vitreon.ui.*
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 
 enum class Tab { HOME, CATEGORIES, PROFILE, SETTINGS }
 
@@ -89,7 +95,21 @@ private fun App(shared: String?, consumeShared: () -> Unit) {
         when { query.isNotEmpty() -> query = ""; view != View.ALL -> view = View.ALL; else -> tab = Tab.HOME }
     }
 
-    Box(Modifier.fillMaxSize().background(Bg).background(Backdrop)) {
+    // atajos de teclado físico (App.tsx): Ctrl+N nota nueva, Ctrl+F buscar, Ctrl+S guardar, Esc atrás
+    val rootFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { rootFocus.requestFocus() } }
+    val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    Box(Modifier.fillMaxSize().background(Bg).background(Backdrop).focusRequester(rootFocus).focusable().onPreviewKeyEvent { e ->
+        if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when {
+            e.key == androidx.compose.ui.input.key.Key.Escape -> { backDispatcher?.onBackPressed(); true }
+            !e.isCtrlPressed -> false
+            e.key == androidx.compose.ui.input.key.Key.N -> { newText = null; newCategory = category; editing = "new"; true }
+            e.key == androidx.compose.ui.input.key.Key.S && editing != null -> { Shortcuts.saveTick++; true }
+            e.key == androidx.compose.ui.input.key.Key.F && editing == null -> { tab = Tab.HOME; Shortcuts.searchTick++; true }
+            else -> false
+        }
+    }) {
         Scaffold(containerColor = Color.Transparent,
             bottomBar = { BottomBar(tab, { tab = it; if (it == Tab.HOME) view = View.ALL }) { newText = null; newCategory = category; editing = "new" } }) { pad ->
             AnimatedContent(tab, Modifier.padding(pad).statusBarsPadding(), label = "tab", transitionSpec = { fadeIn() togetherWith fadeOut() }) { t ->

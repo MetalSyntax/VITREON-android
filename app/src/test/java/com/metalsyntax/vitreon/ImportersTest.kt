@@ -22,8 +22,18 @@ class ImportersTest {
         val n = KeepImporter.read(files).single()
         assertEquals("Compras", n.title)
         assertEquals("- [x] Pan\n- [ ] Leche", n.content)
-        assertEquals(listOf("Casa"), n.tags); assertEquals("Casa", n.folder)
+        assertEquals(listOf("Casa"), n.tags); assertEquals("Casa", n.category)
         assertTrue(n.pinned); assertEquals(1_700_000_000_000L, n.createdAt)
+    }
+
+    @Test fun keepColorMapping() {
+        assertEquals(null, KeepImporter.color("DEFAULT")); assertEquals(null, KeepImporter.color("NOPE"))
+        listOf("RED", "ORANGE", "YELLOW", "GREEN", "TEAL", "BLUE", "CERULEAN", "PURPLE", "PINK", "BROWN", "GRAY").forEach { assertEquals(it.lowercase(), KeepImporter.color(it)) }
+        val n = KeepImporter.read(listOf(f("K/a.json", """{"title":"a","textContent":"b","color":"TEAL","userEditedTimestampUsec":5}"""))).single()
+        assertEquals("teal", n.color)
+        // ida y vuelta por el JSON de la web: el color sobrevive y un valor desconocido se ignora
+        val back = com.metalsyntax.vitreon.data.Json.note(com.metalsyntax.vitreon.data.Json.note(com.metalsyntax.vitreon.data.Note(color = "teal")))
+        assertEquals("teal", back.color)
     }
 
     @Test fun notionStripsIdsAndRewritesLinks() {
@@ -68,5 +78,18 @@ class ImportersTest {
 
     @Test fun tagsIgnoreCodeAndHeadings() {
         assertEquals(listOf("real", "a/b"), Tags.find("# Encabezado\n#real y `#no` y #a/b y #123"))
+    }
+
+    @Test fun notionPropertyCategoryAndCreatedDate() {
+        val files = listOf(f("Export/Plan 89abcdef0123456789abcdef01234567.md", "# Plan\n\nCategory: Finanzas\nTags: q4, ahorro\nCreated: 2026-01-05\n\nTexto"))
+        val n = NotionImporter.read(files).single()
+        assertEquals("Finanzas", n.category); assertEquals(listOf("q4", "ahorro"), n.tags); assertEquals(parseDate("2026-01-05"), n.createdAt)
+    }
+
+    @Test fun obsidianFrontmatterCategoryPinnedAndDates() {
+        val n = ObsidianImporter.read(listOf(f("Boveda/.obsidian/app.json", "{}"),
+            f("Boveda/Carpeta/Nota.md", "---\ncategory: Mi Categoria\npinned: true\narchived: yes\nupdated: 2026-03-01\ncreated: 2026-02-01\n---\nHola"))).single()
+        assertEquals("Mi Categoria", n.category); assertEquals("Carpeta", n.folder)
+        assertTrue(n.pinned && n.archived); assertTrue(n.updatedAt > n.createdAt)
     }
 }

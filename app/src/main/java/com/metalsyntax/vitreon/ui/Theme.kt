@@ -30,10 +30,15 @@ enum class Sort { NEWEST, OLDEST, AZ, ZA }
 enum class Layout { GRID, LIST, CARD }
 enum class Lang(val code: String) { ES("es"), EN("en"), PT("pt") }
 
+/** Paleta de acento como en Parity (Tailwind 500/600); el primero es el índigo de Vitreon (por defecto). */
+val ACCENTS = listOf(0xFF6366F1, 0xFF7C3AED, 0xFF9333EA, 0xFFC026D3, 0xFFDB2777, 0xFFE11D48, 0xFFDC2626, 0xFFEA580C, 0xFFD97706,
+    0xFFCA8A04, 0xFF65A30D, 0xFF16A34A, 0xFF059669, 0xFF0D9488, 0xFF0891B2, 0xFF0284C7, 0xFF2563EB, 0xFF475569).map { Color(it) }
+
 /** Preferencias de interfaz (localStorage en la web). Estado de Compose: cambiar recompone toda la app (idioma incluido). */
 object Prefs {
     private lateinit var sp: android.content.SharedPreferences
     var mode by mutableStateOf(Mode.DARK); private set
+    var accent by mutableStateOf(ACCENTS[0]); private set
     var lang by mutableStateOf(Lang.ES); private set
     var sort by mutableStateOf(Sort.NEWEST); private set
     var layout by mutableStateOf(Layout.GRID); private set
@@ -43,6 +48,7 @@ object Prefs {
     fun init(ctx: Context) {
         sp = ctx.getSharedPreferences("ui", Context.MODE_PRIVATE)
         mode = Mode.entries.firstOrNull { it.name == sp.getString("mode", null) } ?: Mode.DARK
+        accent = Color(sp.getLong("accent", ACCENTS[0].value.toLong()).toULong())
         lang = Lang.entries.firstOrNull { it.name == sp.getString("lang", null) }
             ?: Lang.entries.firstOrNull { it.code == java.util.Locale.getDefault().language } ?: Lang.EN
         sort = Sort.entries.firstOrNull { it.name == sp.getString("sort", null) } ?: Sort.NEWEST
@@ -51,8 +57,9 @@ object Prefs {
         onboarded = sp.getBoolean("onboarded", false)
     }
 
-    private fun put(k: String, v: Any) = sp.edit().apply { if (v is Boolean) putBoolean(k, v) else putString(k, v.toString()) }.apply()
+    private fun put(k: String, v: Any) = sp.edit().apply { when (v) { is Boolean -> putBoolean(k, v); is Long -> putLong(k, v); else -> putString(k, v.toString()) } }.apply()
     fun applyMode(m: Mode) { mode = m; put("mode", m.name) }
+    fun applyAccent(c: Color) { accent = c; put("accent", c.value.toLong()) }
     fun applyLang(l: Lang) { lang = l; put("lang", l.name) }
     fun cycleSort() { sort = Sort.entries[(sort.ordinal + 1) % Sort.entries.size]; put("sort", sort.name) }
     fun cycleLayout() { layout = Layout.entries[(layout.ordinal + 1) % Layout.entries.size]; put("layout", layout.name) }
@@ -66,15 +73,15 @@ val Surface1 get() = Color(Prefs.mode.surface)
 val Surface2 get() = Color(Prefs.mode.surface2)
 val Ink get() = Color(Prefs.mode.ink)
 val Muted get() = Color(Prefs.mode.muted)
-val Brand = Color(0xFF6366F1)        // índigo-500 de la web
-val BrandDeep = Color(0xFF4F46E5)
+val Brand get() = Prefs.accent        // acento elegido (por defecto índigo-500 de la web)
+val BrandDeep get() = androidx.compose.ui.graphics.lerp(Brand, Color.Black, 0.2f)
 val Purple = Color(0xFF9333EA)
 val Danger = Color(0xFFF43F5E)
 val Success = Color(0xFF10B981)
 val Warning = Color(0xFFF59E0B)
-val FabGradient get() = Brush.linearGradient(listOf(Brand, BrandDeep, Purple))
-/** Fondo del tema oscuro: degradado radial índigo (#1e1b4b → #030712), como el body de la web. */
-val Backdrop get() = if (Prefs.mode == Mode.DARK) Brush.radialGradient(listOf(Color(0xFF1E1B4B), Color(0xFF030712)), radius = 1600f) else Brush.linearGradient(listOf(Bg, Bg))
+val FabGradient get() = Brush.linearGradient(listOf(androidx.compose.ui.graphics.lerp(Brand, Color.White, 0.15f), Brand, BrandDeep))  // solo tonos del acento
+/** Fondo del tema oscuro: degradado radial del acento (índigo por defecto ≈ #1e1b4b de la web) → #030712. */
+val Backdrop get() = if (Prefs.mode == Mode.DARK) Brush.radialGradient(listOf(androidx.compose.ui.graphics.lerp(Brand, Color(0xFF030712), 0.78f), Color(0xFF030712)), radius = 1600f) else Brush.linearGradient(listOf(Bg, Bg))
 
 fun catColor(name: String) = Color(com.metalsyntax.vitreon.data.CATEGORY_COLORS[name] ?: 0xFF64748B)
 

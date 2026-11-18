@@ -42,6 +42,7 @@ fun CategoriesScreen(openCategory: (String) -> Unit) {
                     }
                 }
             }
+            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) { TipBanner() }
         }
     }
     if (creating || edit != null) CategorySheet(edit, onDismiss = { creating = false; edit = null })

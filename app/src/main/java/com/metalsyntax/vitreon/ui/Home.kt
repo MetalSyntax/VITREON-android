@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -73,6 +74,8 @@ fun HomeScreen(nav: HomeNav, view: View, setView: (View) -> Unit, query: String,
     var typed by remember(query) { mutableStateOf(query) }
     // espera de 300 ms antes de filtrar, como la web
     LaunchedEffect(typed) { delay(300); setQuery(typed) }
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Shortcuts.searchTick) { if (Shortcuts.searchTick > 0) runCatching { searchFocus.requestFocus() } } // Ctrl+F
     var selected by remember { mutableStateOf(emptySet<String>()) }
     val selecting = selected.isNotEmpty()
     var bulkCategory by remember { mutableStateOf(false) }
@@ -113,7 +116,7 @@ fun HomeScreen(nav: HomeNav, view: View, setView: (View) -> Unit, query: String,
         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().height(56.dp).clip(RoundedCornerShape(28.dp)).background(Surface1).padding(start = 16.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Search, null, tint = Muted, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp))
-            BasicTextField(typed, { typed = it }, Modifier.weight(1f), singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink), cursorBrush = SolidColor(Brand),
+            BasicTextField(typed, { typed = it }, Modifier.weight(1f).focusRequester(searchFocus), singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink), cursorBrush = SolidColor(Brand),
                 decorationBox = { inner -> if (typed.isEmpty()) Text(L("Buscar o #etiqueta", "Search or #tag", "Buscar ou #tag"), color = Muted, style = MaterialTheme.typography.bodyLarge); inner() })
             if (typed.isNotEmpty()) IconButton({ typed = "" }) { Icon(Icons.Outlined.Close, L("Limpiar", "Clear", "Limpar"), tint = Muted) }
             else IconButton({
@@ -202,10 +205,10 @@ fun HomeScreen(nav: HomeNav, view: View, setView: (View) -> Unit, query: String,
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(pinned, key = { "p" + it.id }) { n -> Box(Modifier.width(220.dp)) { NoteCard(n, n.id in selected, ::open) { toggle(n) } } }
                         }
-                    } else items(pinned, key = { "p" + it.id }) { n -> NoteCard(n, n.id in selected, ::open) { toggle(n) } }
+                    } else items(pinned, key = { "p" + it.id }, contentType = { "note" }) { n -> NoteCard(n, n.id in selected, ::open) { toggle(n) } }
                     item(span = StaggeredGridItemSpan.FullLine) { Caps(L("Notas", "Notes", "Notas")) }
                 }
-                items(rest, key = { it.id }) { n -> NoteCard(n, n.id in selected, ::open) { toggle(n) } }
+                items(rest, key = { it.id }, contentType = { "note" }) { n -> NoteCard(n, n.id in selected, ::open) { toggle(n) } }
             }
         }
         }
@@ -257,7 +260,8 @@ fun Modifier.verticalScrollable() = composed { verticalScroll(rememberScrollStat
 fun NoteCard(n: Note, selected: Boolean, onOpen: (Note) -> Unit, onSelect: () -> Unit) {
     val c = Store.data.category(n.category)
     val color = catColor(c.color)
-    Glass(Modifier.fillMaxWidth().let { if (selected) it.background(Brand.copy(alpha = 0.25f), RoundedCornerShape(28.dp)) else it },
+    val tint = n.color?.let { NOTE_COLORS[it] }?.let { Color(it) }
+    Glass(Modifier.fillMaxWidth().let { if (tint != null) it.background(tint.copy(alpha = 0.22f), RoundedCornerShape(28.dp)) else it }.let { if (selected) it.background(Brand.copy(alpha = 0.25f), RoundedCornerShape(28.dp)) else it },
         color = if (selected) Brand.copy(alpha = 0.18f) else Surface1, onClick = { onOpen(n) }, onLongClick = onSelect) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -266,12 +270,14 @@ fun NoteCard(n: Note, selected: Boolean, onOpen: (Note) -> Unit, onSelect: () ->
                     Text(c.name, style = MaterialTheme.typography.labelSmall.copy(letterSpacing = androidx.compose.ui.unit.TextUnit.Unspecified), color = color, maxLines = 1)
                 }
                 Spacer(Modifier.weight(1f))
-                if (n.pinned) Icon(Icons.Outlined.PushPin, L("Fijada", "Pinned", "Fixada"), tint = Warning, modifier = Modifier.size(14.dp))
+                // fijar sin abrir la nota (botón de la tarjeta en NoteCard.tsx)
+                if (!n.trashed) Icon(Icons.Outlined.PushPin, if (n.pinned) L("Desfijar", "Unpin", "Desafixar") else L("Fijar", "Pin", "Fixar"),
+                    tint = if (n.pinned) Warning else Muted.copy(alpha = 0.5f), modifier = Modifier.size(28.dp).tap(onClick = { Store.update(n.id) { it.copy(pinned = !it.pinned) } }).padding(6.dp))
                 if (n.locked) Icon(Icons.Outlined.Lock, L("Bloqueada", "Locked", "Bloqueada"), tint = Muted, modifier = Modifier.size(14.dp))
                 if (selected) Icon(Icons.Outlined.CheckCircle, null, tint = Brand, modifier = Modifier.size(18.dp))
             }
             Spacer(Modifier.height(10.dp))
-            val title = n.title.ifBlank { Markdown.plain(n.content).take(40).substringBefore('\n').ifBlank { L("Sin título", "Untitled", "Sem título") } }
+            val title = remember(n.title, n.content) { n.title.ifBlank { Markdown.plain(n.content).take(40).substringBefore('\n').ifBlank { L("Sin título", "Untitled", "Sem título") } } }
             Text(title, style = MaterialTheme.typography.titleMedium, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (n.locked) {
                 Spacer(Modifier.height(8.dp))
@@ -292,6 +298,16 @@ fun NoteCard(n: Note, selected: Boolean, onOpen: (Note) -> Unit, onSelect: () ->
                     }
                     n.tags.take(4).forEach { Text("#$it", style = MaterialTheme.typography.labelMedium, color = Brand) }
                 }
+            }
+            if (n.trashed) {
+                var confirmDelete by remember { mutableStateOf(false) }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostButton(L("Restaurar", "Restore", "Restaurar"), Icons.Outlined.RestoreFromTrash, Success, Modifier.weight(1f)) { Store.restore(setOf(n.id)) }
+                    GhostButton(L("Borrar", "Delete", "Apagar"), Icons.Outlined.DeleteForever, Danger, Modifier.weight(1f)) { confirmDelete = true }
+                }
+                if (confirmDelete) Confirm(L("¿Borrar para siempre?", "Delete forever?", "Apagar para sempre?"), L("No se puede deshacer.", "This can't be undone.", "Não pode ser desfeito."),
+                    L("Borrar", "Delete", "Apagar"), danger = true, onDismiss = { confirmDelete = false }) { Store.deleteForever(setOf(n.id)); confirmDelete = false }
             }
             Spacer(Modifier.height(8.dp))
             Text(n.deletedAt?.let { L("Borrada ", "Deleted ", "Apagada ") + dateLabel(it) } ?: dateLabel(n.updatedAt), style = MaterialTheme.typography.labelMedium, color = Muted.copy(alpha = 0.7f))
